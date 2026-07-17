@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# builds
+dist/
+.next/
+out/
+*.tsbuildinfo
+
+# env — NEVER commit real secrets. Only .env.example is committed.
+.env
+.env.*
+!.env.example
+
+# turbo
+.turbo/
+
+# test / coverage
+coverage/
+
+# logs
+*.log
+npm-debug.log*
+
+# os
+.DS_Store

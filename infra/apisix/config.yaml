@@ -1,0 +1,25 @@
+# =============================================================================
+# APISIX deployment config — STANDALONE mode (no etcd). Routes/upstreams come
+# from apisix.yaml (rendered from apisix.tpl.yaml at container start).
+# =============================================================================
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+
+apisix:
+  node_listen: 9080
+  enable_admin: false        # standalone: no Admin API; config is file-driven
+  enable_ipv6: false
+  # Allow reading OS env vars from serverless / secret refs.
+  # (proxy-rewrite secret is rendered by the entrypoint, so nothing sensitive here.)
+
+nginx_config:
+  error_log_level: warn
+
+# Only enable the plugins this deployment actually uses (least surface).
+plugins:
+  - proxy-rewrite
+  - forward-auth
+  - serverless-pre-function
+  - serverless-post-function

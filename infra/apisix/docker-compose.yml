@@ -1,0 +1,55 @@
+# =============================================================================
+# Local APISIX stack that mirrors the production edge. Brings up:
+#   - apisix   : the edge proxy (this repo's config)  → :9080
+#   - gateway  : the NestJS forward-auth service        (built from apps/gateway)
+#   - redis    : runtime counters / key cache (AOF persistence on)
+# Mustang (the upstream) is the real external service; nothing to run locally.
+#
+# Copy .env.example → .env and fill the secrets before `docker compose up`.
+# =============================================================================
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: apps/gateway/Dockerfile   # provide when containerising the gateway
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      REDIS_URL: redis://redis:6379
+      API_KEY_PEPPER: ${API_KEY_PEPPER}
+      GATEWAY_FORWARD_AUTH_SECRET: ${GATEWAY_FORWARD_AUTH_SECRET}
+      PORT: "4000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    expose:
+      - "4000"
+
+  apisix:
+    image: apache/apisix:3.11.0-debian
+    depends_on:
+      - gateway
+    environment:
+      GATEWAY_FORWARD_AUTH_SECRET: ${GATEWAY_FORWARD_AUTH_SECRET}
+    ports:
+      - "9080:9080"
+    volumes:
+      - ./config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./apisix.tpl.yaml:/opt/apisix.tpl.yaml:ro
+      - ./entrypoint.sh:/opt/entrypoint.sh:ro
+    # Render the secret into apisix.yaml at start, then hand off to APISIX.
+    entrypoint: ["/bin/sh", "/opt/entrypoint.sh"]
+
+volumes:
+  redis-data:

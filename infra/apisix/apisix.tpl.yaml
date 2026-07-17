@@ -1,0 +1,79 @@
+# =============================================================================
+# APISIX standalone (declarative) config — routes + upstream for the e-invoice
+# gateway. This is a TEMPLATE: the entrypoint renders __GATEWAY_FORWARD_AUTH_SECRET__
+# from $GATEWAY_FORWARD_AUTH_SECRET at container start (see docker-compose.yml),
+# so the real secret is NEVER committed.
+#
+# Request flow for every proxied call:
+#   client ──▶ APISIX route (/*)
+#              1. proxy-rewrite (rewrite phase): inject X-Gateway-Secret
+#              2. forward-auth (access phase): GET gateway /auth with the client's
+#                 Authorization/apikey + X-Gateway-Secret + auto X-Forwarded-*.
+#                   • 2xx  → allow; copy X-User-Id / X-Api-Key-Id onto the upstream request
+#                   • 401/403/429 → APISIX relays that status+body to the client (Mustang never hit)
+#              3. serverless-pre-function (before_proxy): strip X-Gateway-Secret so
+#                 the internal secret is NOT leaked to the third-party Mustang upstream
+#              4. proxy to Mustang (einvoiceservice.officefreund.de)
+# =============================================================================
+
+upstreams:
+  - id: mustang
+    name: mustang-einvoice
+    type: roundrobin
+    scheme: https
+    # pass_host: node → send Host: einvoiceservice.officefreund.de (SNI + vhost match)
+    pass_host: node
+    nodes:
+      "einvoiceservice.officefreund.de:443": 1
+    timeout:
+      connect: 10
+      send: 60
+      read: 60
+
+routes:
+  - id: mustang-proxy
+    name: mustang-proxy
+    desc: "Authenticated proxy to the Mustang e-invoice service"
+    uris:
+      - "/*"
+    upstream_id: mustang
+    plugins:
+      # 1. Inject the shared secret that proves this call originates from APISIX.
+      #    (Rendered from env by the entrypoint; keep the secret out of git.)
+      proxy-rewrite:
+        headers:
+          set:
+            X-Gateway-Secret: "__GATEWAY_FORWARD_AUTH_SECRET__"
+
+      # 2. Forward-auth to the NestJS gateway. request_headers lists the client
+      #    headers (+ the injected secret) to forward; X-Forwarded-Method /
+      #    X-Forwarded-Uri / X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-For
+      #    are added by APISIX automatically. On allow, upstream_headers copies the
+      #    identity headers onto the upstream (Mustang) request.
+      forward-auth:
+        uri: "http://gateway:4000/auth"
+        request_method: GET
+        request_headers:
+          - "Authorization"
+          - "apikey"
+          - "X-Gateway-Secret"
+          - "X-Request-Id"
+        upstream_headers:
+          - "X-User-Id"
+          - "X-Api-Key-Id"
+        client_headers:
+          - "WWW-Authenticate"
+        ssl_verify: false        # gateway is plain-HTTP on the private network
+        timeout: 3000
+        # If the gateway is unreachable, FAIL CLOSED (deny) rather than allowing
+        # unauthenticated traffic through. 503 = auth backend down.
+        allow_degradation: false
+        status_on_error: 503
+
+      # 3. Strip the internal secret before proxying to the third-party upstream.
+      serverless-pre-function:
+        phase: before_proxy
+        functions:
+          - "return function(conf, ctx) local core = require('apisix.core'); core.request.set_header(ctx, 'X-Gateway-Secret', nil) end"
+
+#END
