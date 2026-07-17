@@ -130,9 +130,14 @@ volumes:
 networks:
   gw:
     driver: bridge
-  # The network APISIX's own compose stack created. `docker network ls` on the
-  # VPS shows its real name — set APISIX_NETWORK in .env if it is not the
-  # default below. It is external: this stack joins it, never creates it.
+  # The network APISIX's own compose stack already created — confirmed on the
+  # VPS via `docker network ls`. `external: true` means this stack only joins
+  # it; it never creates, owns, or tears it down.
+  #
+  # Joining is what makes APISIX's forward-auth call resolve: compose registers
+  # this service's name as a DNS alias on every network it attaches to, so
+  # APISIX reaches us at http://gateway:4000/auth without the gateway ever
+  # publishing a port to the host.
   apisix:
     external: true
-    name: ${APISIX_NETWORK:-apisix_default}
+    name: ${APISIX_NETWORK:-docker-apisix_apisix}

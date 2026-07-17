@@ -76,16 +76,33 @@ const R=require('ioredis'); const r=new R(process.env.REDIS_URL);
 r.ping().then(x=>{console.log('gateway -> redis:',x);process.exit(0)}).catch(e=>{console.error(e.message);process.exit(1)})"
 ```
 
-## 4. Find the APISIX network
+## 4. The APISIX network
 
-The gateway joins APISIX's existing Docker network so APISIX can reach it as
-`http://gateway:4000`. Find its real name:
+A Docker network is an isolated LAN: containers on different networks cannot
+reach each other at all, by name or by IP. APISIX's forward-auth plugin makes a
+real HTTP call to `http://gateway:4000/auth`, so the gateway must sit on a
+network APISIX can see. That is the only reason APISIX appears in our compose
+file — `external: true` means we join its existing network and never create,
+own, or modify it.
+
+This is also what lets the gateway stay unpublished: nothing binds a host port,
+so `/auth` is reachable by APISIX and by nothing else.
+
+On the current VPS the network is **`docker-apisix_apisix`** (compose project
+`docker-apisix` + network `apisix`), already set as the default. Re-check with
+`docker network ls` if APISIX is ever redeployed from a different directory, and
+override `APISIX_NETWORK` in `.env` if the name changed.
+
+Containers already on that network (checked 2026-07-17): `docker-apisix-etcd-1`,
+`docker-apisix-web1-1`, `docker-apisix-web2-1`, `docker-apisix-apisix-1`,
+`docker-apisix-prometheus-1`. None is named `gateway`, so our service name is
+free and resolves unambiguously.
+
+After `up`, confirm APISIX resolves the gateway:
 
 ```bash
-docker network ls
+docker exec docker-apisix-apisix-1 curl -s http://gateway:4000/health   # {"status":"ok"}
 ```
-
-Set `APISIX_NETWORK` in `.env` to that name (default assumed: `apisix_default`).
 
 ## 5. Bring it up
 
@@ -106,8 +123,17 @@ docker exec <apisix-container> curl -s http://gateway:4000/health   # {"status":
 ## 6. Configure the APISIX route (Admin API)
 
 This is the same flow encoded in `infra/apisix/apisix.tpl.yaml`, translated to
-the Admin API. Requires APISIX running with etcd — in standalone mode the Admin
-API is disabled and you edit `apisix.yaml` instead.
+the Admin API. The VPS stack runs `docker-apisix-etcd-1`, so APISIX is in etcd
+mode and the Admin API is live (in standalone mode it is disabled and you would
+edit `apisix.yaml` instead).
+
+> The VPS stack looks like the stock `apache/apisix-docker` example (it still
+> has the demo `web1`/`web2` upstreams). That example ships a **well-known
+> default admin key** published in APISIX's docs. Before relying on the Admin
+> API, check `deployment.admin.admin_key` in the APISIX `config.yaml` — if it is
+> still the default, change it, and make sure port 9180 is not reachable from
+> the internet. Anyone with that key can rewrite every route, including this
+> one.
 
 ```bash
 ADMIN=http://127.0.0.1:9180
