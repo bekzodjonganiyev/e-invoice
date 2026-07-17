@@ -1,0 +1,138 @@
+# =============================================================================
+# VPS deploy — portal + gateway + their own Redis.
+#
+# Deliberately NOT in this file:
+#   - APISIX : already running on the VPS in its own Docker stack. Its routes
+#              are configured by hand through the Admin API (see DEPLOY.md).
+#   - Postgres: there is none. The database is Supabase, reached over the
+#              internet — nothing to run here.
+#   - Mustang: the real external upstream, reached by APISIX directly.
+#
+#   Copy .env.example -> .env and fill it in, then:  docker compose up -d --build
+# =============================================================================
+
+services:
+  # This Redis belongs to this stack alone. It is NOT the Redis already running
+  # on the VPS host — that one is left untouched, and its keyspace stays
+  # separate from ours.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # appendonly: survive a restart. The gateway's rate-limit counters and key
+    # cache live here; losing them on reboot would let every quota reset.
+    command: ["redis-server", "--appendonly", "yes"]
+    # No `ports:` — and that is the whole point. Nothing is published to the
+    # host, so this Redis is reachable only from the `gw` network below, where
+    # the other services address it as `redis:6379`. A container has its own
+    # port space, so this 6379 cannot collide with whatever already occupies
+    # 6379 on the VPS host, and it is unreachable from the internet.
+    volumes:
+      - redis-data:/data
+    networks:
+      - gw
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    image: gw-gateway:latest
+    restart: unless-stopped
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL:?SUPABASE_URL is required}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
+      # `redis` is the compose service above, resolved by name over the `gw`
+      # network. Not the host's Redis, and unaffected by the host's port usage.
+      REDIS_URL: redis://redis:6379
+      # MUST be byte-identical to the portal's pepper, or keys minted in the
+      # portal hash differently here and every request 403s.
+      API_KEY_PEPPER: ${API_KEY_PEPPER:?API_KEY_PEPPER is required}
+      # Shared with APISIX; gates /auth via the X-Gateway-Secret header.
+      GATEWAY_FORWARD_AUTH_SECRET: ${GATEWAY_FORWARD_AUTH_SECRET:?GATEWAY_FORWARD_AUTH_SECRET is required}
+      PORT: "4000"
+    # Don't start the gateway until Redis answers PING: BootstrapService seeds
+    # the key cache into Redis at startup and would otherwise crash-loop.
+    depends_on:
+      redis:
+        condition: service_healthy
+    # No `ports:` on purpose — the gateway is reached only by APISIX over the
+    # shared Docker network below. Publishing :4000 to the host would expose
+    # /auth to the internet, and the forward-auth secret is its only gate.
+    expose:
+      - "4000"
+    networks:
+      - gw
+      - apisix
+    healthcheck:
+      # node -e rather than curl: the runtime image is node:20-alpine, no curl.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  portal:
+    build:
+      context: .
+      dockerfile: apps/portal/Dockerfile
+      # Build-time, not runtime: Next inlines these into the client bundle.
+      # Changing them requires a rebuild, not just a restart.
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL is required}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:?NEXT_PUBLIC_SUPABASE_ANON_KEY is required}
+    image: gw-portal:latest
+    restart: unless-stopped
+    environment:
+      # Server Components read these at runtime too (env.public.ts runs on both
+      # sides), so they are needed here as well as at build time.
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      # Server-only. env.server.ts is guarded by `server-only`, so these can
+      # never reach the browser bundle.
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required}
+      API_KEY_PEPPER: ${API_KEY_PEPPER:?API_KEY_PEPPER is required}
+      PORT: "3000"
+    # Bound to loopback: terminate TLS for the portal's domain in your reverse
+    # proxy on the host and forward to 127.0.0.1:3000. Change to "3000:3000"
+    # only if you intend to serve plain HTTP straight off the VPS.
+    ports:
+      - "127.0.0.1:${PORTAL_PORT:-3000}:3000"
+    networks:
+      - gw
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  # Named volume: survives `docker compose down` and image rebuilds. It is
+  # removed only by `docker compose down -v`.
+  redis-data:
+
+networks:
+  gw:
+    driver: bridge
+  # The network APISIX's own compose stack created. `docker network ls` on the
+  # VPS shows its real name — set APISIX_NETWORK in .env if it is not the
+  # default below. It is external: this stack joins it, never creates it.
+  apisix:
+    external: true
+    name: ${APISIX_NETWORK:-apisix_default}

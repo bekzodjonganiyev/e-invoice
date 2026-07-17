@@ -1,0 +1,47 @@
+# Build context excludes.
+#
+# NOTE: patterns here are matched from the context root, NOT recursively — a
+# bare `node_modules/` would exclude only the root one and happily copy
+# apps/*/node_modules and apps/*/.env into the image. Hence the `**/` prefixes.
+
+# dependencies — reinstalled inside the image from the lockfile
+**/node_modules
+.pnpm-store
+
+# builds — rebuilt inside the image; stale local output must not shadow it
+**/dist
+**/.next
+**/out
+**/*.tsbuildinfo
+
+# env — SECRETS. Values are injected at runtime by compose, never baked in.
+**/.env
+**/.env.*
+!.env.example
+
+# turbo local cache
+**/.turbo
+
+# vcs / editor / os
+.git
+.gitignore
+.vscode
+.idea
+**/.DS_Store
+
+# test / coverage
+**/coverage
+**/*.spec.ts
+**/*.e2e-spec.ts
+**/*.test.ts
+
+# infra is not part of the app deploy (APISIX runs separately on the VPS)
+infra
+
+# docs and local tooling
+docs
+**/*.md
+
+# logs
+**/*.log
+npm-debug.log*
