@@ -29,14 +29,14 @@ RUN apk add --no-cache tini
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=4001
 
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json ./
 
 USER node
-EXPOSE 3000
+EXPOSE 4001
 
 # tini as PID 1 so SIGTERM reaches node and `docker stop` is clean.
 ENTRYPOINT ["/sbin/tini", "--"]
