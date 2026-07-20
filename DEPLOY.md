@@ -187,12 +187,31 @@ Why each piece matters:
 - `serverless-pre-function` strips the internal secret *before* proxying, so it
   never leaks to the third-party Mustang service.
 
-## 7. Portal TLS
+## 7. Domains & TLS (nginx)
 
-The portal is published on `127.0.0.1:3000` only. Terminate TLS for its domain
-in your host reverse proxy and forward to that port. Add the portal's public
-URL to Supabase → Auth → URL Configuration (Site URL + redirect allowlist), or
-Google OAuth callbacks will fail in production.
+Both public hostnames are TLS-terminated by nginx on the host:
+
+- `smartlist.uz` → portal (`127.0.0.1:3000`)
+- `api.smartlist.uz` → APISIX (`127.0.0.1:9080`)
+
+Ready-to-install server blocks and the full runbook (DNS, certbot, Supabase auth
+URLs, the admin-role migration, and seeding admin accounts) live in
+[`deploy/README.md`](deploy/README.md) with configs under `deploy/nginx/`.
+
+Short version:
+
+```bash
+sudo cp deploy/nginx/*.conf /etc/nginx/sites-available/
+sudo ln -s /etc/nginx/sites-available/smartlist.uz     /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/api.smartlist.uz /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d smartlist.uz -d www.smartlist.uz
+sudo certbot --nginx -d api.smartlist.uz
+```
+
+Then set Supabase → Auth → URL Configuration: Site URL `https://smartlist.uz`,
+redirect allowlist `https://smartlist.uz/auth/callback` (or customer Google
+sign-in fails after consent). Admin email/password sign-in needs neither.
 
 ## 8. Verify end to end
 

@@ -5,7 +5,7 @@ type CookieToSet = { name: string; value: string; options: CookieOptions };
 import type { Database } from '@gw/db';
 import { publicSupabaseUrl, publicSupabaseAnonKey } from '../env.public';
 
-const PROTECTED_PREFIXES = ['/dashboard', '/keys', '/usage', '/billing'];
+const PROTECTED_PREFIXES = ['/dashboard', '/keys', '/usage', '/billing', '/admin'];
 
 /**
  * Refresh the Supabase session on every request and guard the dashboard area.

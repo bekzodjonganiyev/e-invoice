@@ -2,6 +2,7 @@
 // (In a real project these would be produced by `supabase gen types typescript`;
 // they are kept in sync with migrations/0001_init.sql.)
 
+export type UserRole = 'user' | 'admin';
 export type KeyEnvironment = 'live' | 'test';
 export type ApiKeyStatus = 'active' | 'exhausted' | 'revoked' | 'expired';
 export type BillingStatus = 'pending' | 'paid' | 'void';
@@ -11,6 +12,7 @@ export type ProfileRow = {
   id: string;
   full_name: string | null;
   is_active: boolean;
+  role: UserRole;
   created_at: string | null;
   updated_at: string | null;
 }
