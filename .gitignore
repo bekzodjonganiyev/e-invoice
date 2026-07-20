@@ -26,4 +26,7 @@ npm-debug.log*
 # os
 .DS_Store
 
-infra/
+# infra — local-only mocks (apisix). Track mustang-mock: it must reach the VPS
+# via git so its Dockerfile/compose can build there.
+infra/*
+!infra/mustang-mock/

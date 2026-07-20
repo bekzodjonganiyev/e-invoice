@@ -1,0 +1,55 @@
+# =============================================================================
+# Mustang mock upstream, containerised so APISIX can proxy to it during
+# end-to-end testing on the VPS. This is a SEPARATE stack from the gateway
+# monorepo compose — the only thing tying the two together is the shared
+# external network below.
+#
+# It stands in for the real einvoiceservice.officefreund.de. APISIX reaches it
+# by name at  http://mustang-mock:3000  — exactly the same mechanism by which
+# it already reaches the gateway at http://gateway:4000.
+#
+#   docker compose up -d --build
+#
+# Then repoint APISIX's `mustang` upstream at this container (see the gateway
+# repo's DEPLOY.md / the note at the bottom of this file).
+# =============================================================================
+services:
+  mustang-mock:
+    build:
+      context: .
+    image: mustang-mock:latest
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+    # No `ports:` — APISIX reaches it over the shared `apisix` network below, so
+    # nothing needs to be published to the host. Uncomment to curl it directly
+    # from the VPS while debugging (bound to loopback, not the internet):
+    # ports:
+    #   - "127.0.0.1:9081:3000"
+    expose:
+      - "3000"
+    networks:
+      - apisix
+    healthcheck:
+      # node -e, not curl: the image is node:22-alpine, no curl. Hits the mock's
+      # own ping endpoint.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/v1.8.2/mustang/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+networks:
+  # The SAME external network APISIX owns and the gateway compose already joins.
+  # `external: true` means this stack only attaches to it — it never creates,
+  # owns, or tears it down. Joining is what makes `mustang-mock` resolvable as a
+  # DNS name from inside APISIX. Must match APISIX_NETWORK in the gateway .env.
+  apisix:
+    external: true
+    name: ${APISIX_NETWORK:-docker-apisix_apisix}
