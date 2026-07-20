@@ -15,7 +15,7 @@
 # one Supabase project. Pointing at a different project means a rebuild.
 # =============================================================================
 
-FROM node:20-alpine AS base
+FROM node:22-alpine AS base
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 WORKDIR /repo
 
@@ -51,7 +51,7 @@ RUN test -n "$NEXT_PUBLIC_SUPABASE_ANON_KEY" || (echo "ERROR: --build-arg NEXT_P
 RUN pnpm exec turbo run build --filter=@gw/portal
 
 # ---- runtime -----------------------------------------------------------------
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 RUN apk add --no-cache tini
 WORKDIR /app
 

@@ -7,7 +7,12 @@
 # workspace packages @gw/shared and @gw/db and on the root pnpm lockfile.
 # =============================================================================
 
-FROM node:20-alpine AS base
+# Node 22, not 20: @supabase/supabase-js (2.110.x, pulled in by the ^2.47.10
+# range) constructs a RealtimeClient inside createClient() and needs a native
+# global WebSocket, which only exists from Node 22 on. On Node 20 the gateway
+# throws "native WebSocket not found" at startup and crash-loops. Do not
+# downgrade this without also pinning supabase-js.
+FROM node:22-alpine AS base
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 WORKDIR /repo
 
@@ -38,7 +43,7 @@ RUN pnpm exec turbo run build --filter=@gw/gateway
 RUN pnpm deploy --legacy --filter=@gw/gateway --prod /out
 
 # ---- runtime -----------------------------------------------------------------
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 RUN apk add --no-cache tini
 WORKDIR /app
 

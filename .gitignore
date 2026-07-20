@@ -25,3 +25,5 @@ npm-debug.log*
 
 # os
 .DS_Store
+
+infra/

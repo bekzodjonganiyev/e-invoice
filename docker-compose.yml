@@ -68,7 +68,7 @@ services:
       - gw
       - apisix
     healthcheck:
-      # node -e rather than curl: the runtime image is node:20-alpine, no curl.
+      # node -e rather than curl: the runtime image is node:22-alpine, no curl.
       test:
         [
           "CMD",
