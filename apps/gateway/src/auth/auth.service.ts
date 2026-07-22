@@ -12,6 +12,7 @@ import {
   currentPeriodYM,
   hashApiKey,
   keyMeta,
+  parseKeyEnvironment,
   parseKeyPrefix,
   safeCompareHex,
   usageCounter,
@@ -108,7 +109,19 @@ export class AuthService {
       throw new UnauthorizedException('Invalid API key');
     }
 
-    // 4. Status / expiry.
+    // 4. Environment cross-check — defense in depth against APISIX ever
+    //    routing a key to the wrong service. `so'rov kelgan muhit` is the same
+    //    signal APISIX used to pick the test/live route (the key's own
+    //    `gw_{env}_` prefix); the gateway re-derives it independently and
+    //    rejects any drift from the DB's `api_keys.environment` so a stale
+    //    Redis cache entry or a hand-edited DB row can never authorize a call
+    //    under the wrong environment.
+    const requestedEnv = parseKeyEnvironment(fullKey);
+    if (requestedEnv === null || requestedEnv !== meta.environment) {
+      throw new UnauthorizedException('API key not valid for this environment');
+    }
+
+    // 5. Status / expiry.
     if (meta.status === 'revoked') {
       throw new UnauthorizedException('API key revoked');
     }
@@ -119,18 +132,28 @@ export class AuthService {
       throw new ForbiddenException('API key expired');
     }
 
-    // 5. Rate limit.
-    const withinRate = await this.rateLimit.check(meta.id, meta.rateLimitPerMin, now);
+    // 6. Rate limit. `test`-environment keys are additionally capped by a
+    //    hard ceiling (env-configurable) regardless of what the key row says,
+    //    so the sandbox stays cheap to abuse even if a key is misconfigured.
+    const effectiveRateLimitPerMin =
+      meta.environment === 'test'
+        ? Math.min(meta.rateLimitPerMin ?? Infinity, this.config.testEnvRateLimitPerMinCeiling)
+        : meta.rateLimitPerMin;
+    const withinRate = await this.rateLimit.check(meta.id, effectiveRateLimitPerMin, now);
     if (!withinRate) {
       throw new HttpException('Rate limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
     }
 
-    // 6. Quota.
+    // 7. Quota. Same test-environment ceiling as the rate limit.
+    const effectiveMonthlyLimit =
+      meta.environment === 'test'
+        ? Math.min(meta.monthlyLimit, this.config.testEnvMonthlyLimitCeiling)
+        : meta.monthlyLimit;
     const ym = currentPeriodYM(now);
     const counterKey = usageCounter(meta.id, ym);
     const usedRaw = await this.redis.get(counterKey);
     const used = usedRaw ? Number(usedRaw) : 0;
-    if (used >= meta.monthlyLimit) {
+    if (used >= effectiveMonthlyLimit) {
       await this.redis.hset(keyMeta(prefix), 'status', 'exhausted');
       await this.redis.lpush(
         KEY_STATUS_QUEUE,
@@ -139,7 +162,7 @@ export class AuthService {
       throw new HttpException('Monthly quota exhausted', HttpStatus.TOO_MANY_REQUESTS);
     }
 
-    // 7. Authorize: record usage (pre-flight, 1 unit per authorized attempt).
+    // 8. Authorize: record usage (pre-flight, 1 unit per authorized attempt).
     await this.redis.incr(counterKey);
     const event: QueuedUsageEvent = {
       api_key_id: meta.id,

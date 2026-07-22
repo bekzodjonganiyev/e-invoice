@@ -1,0 +1,80 @@
+{
+  "//": "Declarative APISIX topology for the Mustang proxy — upstreams, services, routes. Edited here and applied with sync-apisix.mjs (idempotent Admin API PUTs); do not hand-edit routes via curl. See mustang-gateway-docs-sandbox-qarorlar.md for the design rationale.",
+
+  "upstreams": [
+    {
+      "id": "mustang-prod-upstream",
+      "name": "mustang-prod-upstream",
+      "type": "roundrobin",
+      "scheme": "https",
+      "pass_host": "node",
+      "nodes": { "einvoiceservice.officefreund.de:443": 1 },
+      "timeout": { "connect": 10, "send": 60, "read": 60 }
+    },
+    {
+      "id": "mustang-mock-upstream",
+      "name": "mustang-mock-upstream",
+      "type": "roundrobin",
+      "scheme": "http",
+      "pass_host": "pass",
+      "nodes": { "mustang-mock:4001": 1 }
+    }
+  ],
+
+  "services": [
+    {
+      "id": "mustang-mock-prod",
+      "name": "mustang-mock-prod",
+      "desc": "Live traffic — real Mustang e-invoice service. gw_live_* keys only.",
+      "upstream_id": "mustang-prod-upstream",
+      "extraPlugins": {}
+    },
+    {
+      "id": "mustang-mock-test",
+      "name": "mustang-mock-test",
+      "desc": "Sandbox traffic — mustang-mock container (fake but correctly-shaped responses). gw_test_* keys only. Extra plugins protect the public docs 'Try it' surface.",
+      "upstream_id": "mustang-mock-upstream",
+      "extraPlugins": {
+        "cors": {
+          "allow_origins": "https://smartlist.uz",
+          "allow_methods": "GET,POST",
+          "allow_headers": "Authorization,apikey,Content-Type,X-Request-Id",
+          "expose_headers": "Content-Disposition",
+          "allow_credential": false,
+          "max_age": 3600
+        },
+        "limit-count": {
+          "count": 60,
+          "time_window": 60,
+          "key_type": "var",
+          "key": "remote_addr",
+          "policy": "local",
+          "rejected_code": 429,
+          "rejected_msg": "Too many sandbox requests from this IP — try again shortly."
+        }
+      }
+    }
+  ],
+
+  "routes": [
+    {
+      "id": "mustang-test-route",
+      "name": "mustang-test-route",
+      "desc": "Sandbox — any call whose apikey/Authorization carries a gw_test_ key. Checked before the prod catch-all (higher priority).",
+      "uris": ["/api/v1.8.2/*"],
+      "service_id": "mustang-mock-test",
+      "priority": 10,
+      "vars": [
+        ["OR", ["http_apikey", "~~", "^gw_test_"], ["http_authorization", "~~", "^Bearer\\s+gw_test_"]]
+      ]
+    },
+    {
+      "id": "mustang-prod-route",
+      "name": "mustang-prod-route",
+      "desc": "Catch-all — everything not matched by mustang-test-route (live keys, missing/malformed keys). The gateway still authenticates every call; this route only decides which upstream to reach.",
+      "uris": ["/api/v1.8.2/*"],
+      "service_id": "mustang-mock-prod",
+      "priority": 0
+    }
+  ]
+}

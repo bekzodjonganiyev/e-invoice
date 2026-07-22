@@ -76,6 +76,20 @@ export function parseKeyPrefix(fullKey: string): string | null {
 }
 
 /**
+ * Parse the environment embedded in a full key's own prefix (`gw_{env}_...`),
+ * or null if malformed. This is the same signal APISIX uses to route the
+ * request to the test vs live service — the gateway re-derives it independently
+ * from the key itself and cross-checks it against `api_keys.environment` in the
+ * DB, so a key can never be authorized under a different environment than the
+ * one it was issued for.
+ */
+export function parseKeyEnvironment(fullKey: string): KeyEnvironment | null {
+  const m = KEY_RE.exec(fullKey ?? '');
+  if (!m) return null;
+  return m[1] as KeyEnvironment;
+}
+
+/**
  * HMAC-SHA256(fullKey, pepper) hex. Deterministic given the same pepper.
  * The SAME pepper must be configured in Portal and Gateway so hashes match.
  */

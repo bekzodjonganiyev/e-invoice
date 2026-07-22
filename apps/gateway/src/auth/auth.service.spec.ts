@@ -24,6 +24,8 @@ function makeConfig() {
     apiKeyPepper: PEPPER,
     forwardAuthSecret: SECRET,
     port: 4000,
+    testEnvRateLimitPerMinCeiling: 30,
+    testEnvMonthlyLimitCeiling: 2000,
   };
 }
 
@@ -60,10 +62,13 @@ describe('AuthService.authorize', () => {
   let redis: any;
   let svc: AuthService;
 
-  async function seedKey(over: Partial<ActiveKeyBootstrapRow> = {}) {
-    const { fullKey, keyPrefix } = generateApiKey('live');
+  async function seedKey(
+    over: Partial<ActiveKeyBootstrapRow> = {},
+    env: 'live' | 'test' = 'live',
+  ) {
+    const { fullKey, keyPrefix } = generateApiKey(env);
     const keyHash = hashApiKey(fullKey, PEPPER);
-    const row = metaRow({ key_prefix: keyPrefix, ...over }, keyHash);
+    const row = metaRow({ key_prefix: keyPrefix, environment: env, ...over }, keyHash);
     await redis.hset(keyMeta(keyPrefix), buildMetaHash(row));
     return { fullKey, keyPrefix, row };
   }
@@ -170,5 +175,66 @@ describe('AuthService.authorize', () => {
       now,
     );
     expect(res.apiKeyId).toBe(row.id);
+  });
+
+  describe('environment cross-check', () => {
+    it('200: a test key with matching DB environment is authorized', async () => {
+      const { fullKey, row } = await seedKey({}, 'test');
+      const res = await svc.authorize(bearer(fullKey), now);
+      expect(res).toEqual({ userId: row.user_id, apiKeyId: row.id });
+    });
+
+    it('401: a live-prefixed key whose DB row says environment=test is rejected', async () => {
+      // Simulates drift between the key's own gw_live_ prefix and a
+      // hand-edited/stale `api_keys.environment` column.
+      const { fullKey } = await seedKey({ environment: 'test' });
+      expect(await denyStatus(() => svc.authorize(bearer(fullKey), now))).toBe(401);
+    });
+
+    it('401: a test-prefixed key whose DB row says environment=live is rejected', async () => {
+      const { fullKey } = await seedKey({ environment: 'live' }, 'test');
+      expect(await denyStatus(() => svc.authorize(bearer(fullKey), now))).toBe(401);
+    });
+  });
+
+  describe('test-environment ceilings', () => {
+    it('429: test key rate limit is capped even when the DB row allows more', async () => {
+      const { fullKey } = await seedKey({ rate_limit_per_min: 1000 }, 'test');
+      for (let i = 0; i < 30; i++) {
+        await svc.authorize(bearer(fullKey), now);
+      }
+      // Ceiling (from makeConfig) is 30/min — the 31st call must be denied
+      // even though the key row allows 1000.
+      expect(await denyStatus(() => svc.authorize(bearer(fullKey), now))).toBe(429);
+    });
+
+    it('429: test key monthly quota is capped even when the DB row allows more', async () => {
+      const { fullKey, keyPrefix, row } = await seedKey(
+        { monthly_limit: 1_000_000, rate_limit_per_min: null },
+        'test',
+      );
+      // One call per distinct minute so the per-minute ceiling never trips —
+      // only the monthly-quota ceiling is under test here.
+      let t = now.getTime();
+      for (let i = 0; i < 2000; i++) {
+        await svc.authorize(bearer(fullKey), new Date(t));
+        t += 60_000;
+      }
+      // Ceiling (from makeConfig) is 2000/month.
+      expect(await denyStatus(() => svc.authorize(bearer(fullKey), new Date(t)))).toBe(429);
+      expect(await redis.hget(keyMeta(keyPrefix), 'status')).toBe('exhausted');
+      expect(Number(await redis.get(usageCounter(row.id, currentPeriodYM(now))))).toBe(2000);
+    });
+
+    it('live keys are unaffected by the test-environment ceilings', async () => {
+      const { fullKey } = await seedKey({ rate_limit_per_min: null, monthly_limit: 1_000_000 });
+      for (let i = 0; i < 30; i++) {
+        await svc.authorize(bearer(fullKey), now);
+      }
+      // A live key with no rate limit configured must NOT hit the 30/min
+      // ceiling that only applies to test keys.
+      const res = await svc.authorize(bearer(fullKey), now);
+      expect(res).toBeDefined();
+    });
   });
 });

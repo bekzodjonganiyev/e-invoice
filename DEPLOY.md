@@ -120,12 +120,26 @@ docker compose exec gateway node -e "fetch('http://127.0.0.1:4000/health').then(
 docker exec <apisix-container> curl -s http://gateway:4000/health   # {"status":"ok"}
 ```
 
-## 6. Configure the APISIX route (Admin API)
+## 6. Configure APISIX (Admin API) — upstreams, services, routes
 
-This is the same flow encoded in `infra/apisix/apisix.tpl.yaml`, translated to
-the Admin API. The VPS stack runs `docker-apisix-etcd-1`, so APISIX is in etcd
-mode and the Admin API is live (in standalone mode it is disabled and you would
-edit `apisix.yaml` instead).
+Route/service/plugin config for the Mustang proxy is no longer applied with
+one-off `curl` commands. It lives in one git-tracked file,
+[`infra/apisix/services.json`](infra/apisix/services.json), applied by
+[`infra/apisix/sync-apisix.mjs`](infra/apisix/sync-apisix.mjs) — a plain Node
+script with no dependencies, safe to re-run any time the file changes (every
+object is PUT by its fixed `id`, so it converges the server to match the file).
+
+Topology: two upstreams (real Mustang for `live` calls, the `mustang-mock`
+container for `test` calls), two services (`mustang-mock-prod`,
+`mustang-mock-test` — same forward-auth chain, only the upstream and a couple
+of sandbox-only plugins differ), and two wildcard routes on
+`/api/v1.8.2/*` that pick a service by inspecting the caller's key prefix
+(`gw_test_*` → test, everything else → prod catch-all). See
+`mustang-gateway-docs-sandbox-qarorlar.md` for the full rationale.
+
+The VPS stack runs `docker-apisix-etcd-1`, so APISIX is in etcd mode and the
+Admin API is live (in standalone mode it is disabled and you would edit
+`apisix.yaml` instead).
 
 > The VPS stack looks like the stock `apache/apisix-docker` example (it still
 > has the demo `web1`/`web2` upstreams). That example ships a **well-known
@@ -136,49 +150,16 @@ edit `apisix.yaml` instead).
 > one.
 
 ```bash
-ADMIN=http://127.0.0.1:9180
-KEY=<your APISIX admin api key>
-SECRET=<the same GATEWAY_FORWARD_AUTH_SECRET as in .env>
+cd infra/apisix
+export ADMIN=http://127.0.0.1:9180
+export KEY=<your APISIX admin api key>
+export SECRET=<the same GATEWAY_FORWARD_AUTH_SECRET as in .env>
 
-# upstream → Mustang
-curl -s "$ADMIN/apisix/admin/upstreams/mustang" -H "X-API-KEY: $KEY" -X PUT -d '{
-  "name": "mustang-einvoice",
-  "type": "roundrobin",
-  "scheme": "https",
-  "pass_host": "node",
-  "nodes": { "einvoiceservice.officefreund.de:443": 1 },
-  "timeout": { "connect": 10, "send": 60, "read": 60 }
-}'
-
-# route → inject secret, forward-auth, strip secret, proxy
-curl -s "$ADMIN/apisix/admin/routes/mustang-proxy" -H "X-API-KEY: $KEY" -X PUT -d '{
-  "name": "mustang-proxy",
-  "uris": ["/*"],
-  "upstream_id": "mustang",
-  "plugins": {
-    "proxy-rewrite": {
-      "headers": { "set": { "X-Gateway-Secret": "'"$SECRET"'" } }
-    },
-    "forward-auth": {
-      "uri": "http://gateway:4000/auth",
-      "request_method": "GET",
-      "request_headers": ["Authorization", "apikey", "X-Gateway-Secret", "X-Request-Id"],
-      "upstream_headers": ["X-User-Id", "X-Api-Key-Id"],
-      "client_headers": ["WWW-Authenticate"],
-      "ssl_verify": false,
-      "timeout": 3000,
-      "allow_degradation": false,
-      "status_on_error": 503
-    },
-    "serverless-pre-function": {
-      "phase": "before_proxy",
-      "functions": ["return function(conf, ctx) local core = require(\"apisix.core\"); core.request.set_header(ctx, \"X-Gateway-Secret\", nil) end"]
-    }
-  }
-}'
+node sync-apisix.mjs --dry-run   # review the exact payloads first
+node sync-apisix.mjs             # apply
 ```
 
-Why each piece matters:
+Why each piece of the forward-auth chain matters:
 
 - `proxy-rewrite` proves to the gateway that the call came from APISIX.
 - `forward-auth` with `allow_degradation: false` **fails closed** — if the
@@ -186,6 +167,10 @@ Why each piece matters:
   unauthenticated.
 - `serverless-pre-function` strips the internal secret *before* proxying, so it
   never leaks to the third-party Mustang service.
+
+The `mustang-mock-test` service additionally carries `cors` (only the
+`smartlist.uz` origin, for the docs "Try it" panel) and `limit-count`
+(IP-based, protects the public docs surface from anonymous scanning).
 
 ## 7. Domains & TLS (nginx)
 

@@ -6,6 +6,14 @@ export interface GatewayConfig {
   apiKeyPepper: string;
   forwardAuthSecret: string;
   port: number;
+  /**
+   * Hard ceilings applied to `test`-environment keys, regardless of what is
+   * configured on the key row — the sandbox (docs "Try it" panel, anonymous
+   * scanning surface) must stay cheap to abuse even if a key is misconfigured
+   * with a high/no limit. `live` keys are unaffected.
+   */
+  testEnvRateLimitPerMinCeiling: number;
+  testEnvMonthlyLimitCeiling: number;
 }
 
 function required(name: string, value: string | undefined): string {
@@ -29,6 +37,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
       env.GATEWAY_FORWARD_AUTH_SECRET,
     ),
     port: Number(env.PORT ?? 4000),
+    testEnvRateLimitPerMinCeiling: Number(env.TEST_ENV_RATE_LIMIT_PER_MIN_CEILING ?? 30),
+    testEnvMonthlyLimitCeiling: Number(env.TEST_ENV_MONTHLY_LIMIT_CEILING ?? 2000),
   };
 }
 

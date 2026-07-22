@@ -61,43 +61,37 @@ curl -i http://localhost:9080/v1/documents \
 
 ## Deploying onto an already-running APISIX server
 
-You already have APISIX running. Two ways to install this route:
+You already have APISIX running (this is the VPS case — see the repo's
+`DEPLOY.md`). Two ways to install the Mustang proxy:
 
 **A. Standalone (file) mode** — copy `config.yaml` + the rendered `apisix.yaml`
 (run `entrypoint.sh`'s sed step, or substitute the secret yourself) into
 `/usr/local/apisix/conf/` and reload APISIX.
 
-**B. Admin API mode (etcd)** — create the upstream and route via the Admin API.
-Equivalent to `apisix.tpl.yaml`:
+**B. Admin API mode (etcd)** — this is the VPS's actual mode. Don't hand-write
+`curl` calls: [`services.json`](services.json) declares two upstreams (real
+Mustang for `live` calls, the `mustang-mock` container for `test` calls), two
+services (`mustang-mock-prod` / `mustang-mock-test` — same forward-auth chain,
+sandbox-only `cors` + `limit-count` on the test one), and two wildcard routes
+on `/api/v1.8.2/*` that pick a service by the caller's key prefix. Apply it
+with [`sync-apisix.mjs`](sync-apisix.mjs) (plain Node, no dependencies,
+idempotent — safe to re-run after any edit to `services.json`):
 
 ```bash
-# Upstream → Mustang
-curl http://127.0.0.1:9180/apisix/admin/upstreams/mustang -H "X-API-KEY: $ADMIN_KEY" -X PUT -d '{
-  "type":"roundrobin","scheme":"https","pass_host":"node",
-  "nodes":{"einvoiceservice.officefreund.de:443":1}
-}'
+export ADMIN=http://127.0.0.1:9180
+export KEY=<APISIX admin key>                 # config.yaml -> deployment.admin.admin_key
+export SECRET=<GATEWAY_FORWARD_AUTH_SECRET>   # same value as the gateway .env
 
-# Route → forward-auth + secret inject + secret strip
-curl http://127.0.0.1:9180/apisix/admin/routes/mustang-proxy -H "X-API-KEY: $ADMIN_KEY" -X PUT -d '{
-  "uri":"/*","upstream_id":"mustang",
-  "plugins":{
-    "proxy-rewrite":{"headers":{"set":{"X-Gateway-Secret":"'"$GATEWAY_FORWARD_AUTH_SECRET"'"}}},
-    "forward-auth":{
-      "uri":"http://GATEWAY_HOST:4000/auth","request_method":"GET",
-      "request_headers":["Authorization","apikey","X-Gateway-Secret","X-Request-Id"],
-      "upstream_headers":["X-User-Id","X-Api-Key-Id"],
-      "ssl_verify":false,"status_on_error":503
-    },
-    "serverless-pre-function":{"phase":"before_proxy","functions":[
-      "return function(conf, ctx) local core = require(\"apisix.core\"); core.request.set_header(ctx, \"X-Gateway-Secret\", nil) end"
-    ]}
-  }
-}'
+node sync-apisix.mjs --dry-run   # review the exact payloads first
+node sync-apisix.mjs             # apply
 ```
 
-Make sure `proxy-rewrite`, `forward-auth`, and `serverless-pre-function` are in
-your APISIX `plugins` list, and that the gateway is reachable on the private
-network but **not** publicly (only APISIX should be able to call `/auth`).
+Make sure `proxy-rewrite`, `forward-auth`, `serverless-pre-function`, `cors`,
+and `limit-count` are all in your APISIX `plugins` list, and that the gateway
+is reachable on the private network but **not** publicly (only APISIX should
+be able to call `/auth`). See `mustang-gateway-docs-sandbox-qarorlar.md` at the
+repo root for the design rationale (why two services instead of 22+ routes,
+why the environment split is routing-only and not a security boundary).
 
 ## Verifying the contract BEFORE deploying
 

@@ -3,6 +3,7 @@ import {
   generateApiKey,
   deriveKeyPrefix,
   parseKeyPrefix,
+  parseKeyEnvironment,
   hashApiKey,
   safeCompareHex,
   KEY_PREFIX_TOKEN_LEN,
@@ -57,6 +58,19 @@ describe('deriveKeyPrefix / parseKeyPrefix', () => {
     expect(parseKeyPrefix('nope')).toBeNull();
     expect(parseKeyPrefix('gw_live_')).toBeNull();
     expect(parseKeyPrefix('xx_live_abcdef1234')).toBeNull();
+  });
+});
+
+describe('parseKeyEnvironment', () => {
+  it('extracts the env embedded in the key', () => {
+    expect(parseKeyEnvironment(generateApiKey('live').fullKey)).toBe('live');
+    expect(parseKeyEnvironment(generateApiKey('test').fullKey)).toBe('test');
+  });
+
+  it('returns null for malformed keys', () => {
+    expect(parseKeyEnvironment('')).toBeNull();
+    expect(parseKeyEnvironment('nope')).toBeNull();
+    expect(parseKeyEnvironment('xx_live_abcdef1234')).toBeNull();
   });
 });
 
