@@ -1,5 +1,6 @@
 {
   "//": "Declarative APISIX topology for the Mustang proxy — upstreams, services, routes. Edited here and applied with sync-apisix.mjs (idempotent Admin API PUTs); do not hand-edit routes via curl. See mustang-gateway-docs-sandbox-qarorlar.md for the design rationale.",
+  "//cors-priority": "mustang-mock-test's cors plugin sets _meta.priority=10000 so it runs BEFORE forward-auth — otherwise the browser's OPTIONS preflight (sent with no Authorization header) gets 401'd by forward-auth before cors ever gets to answer it, breaking every browser call with a generic 'Failed to fetch'.",
 
   "upstreams": [
     {
@@ -41,7 +42,8 @@
           "allow_headers": "Authorization,apikey,Content-Type,X-Request-Id",
           "expose_headers": "Content-Disposition",
           "allow_credential": false,
-          "max_age": 3600
+          "max_age": 3600,
+          "_meta": { "priority": 10000 }
         },
         "limit-count": {
           "count": 60,
