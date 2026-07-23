@@ -1,6 +1,6 @@
 {
   "//": "Declarative APISIX topology for the Mustang proxy — upstreams, services, routes. Edited here and applied with sync-apisix.mjs (idempotent Admin API PUTs); do not hand-edit routes via curl. See mustang-gateway-docs-sandbox-qarorlar.md for the design rationale.",
-  "//cors-priority": "mustang-mock-test's cors plugin sets _meta.priority=10000 so it runs BEFORE forward-auth — otherwise the browser's OPTIONS preflight (sent with no Authorization header) gets 401'd by forward-auth before cors ever gets to answer it, breaking every browser call with a generic 'Failed to fetch'.",
+  "//cors-priority": "Both services set cors._meta.priority=10000 so cors runs BEFORE forward-auth. This must be on BOTH mustang-mock-prod and mustang-mock-test: preflight OPTIONS requests carry no Authorization/apikey header value (that's the point of preflight), so the vars-based route match below (^gw_test_) never matches an OPTIONS call and it always falls through to the prod catch-all route — if only the test service had cors, every preflight would still 401 there with no CORS headers, breaking 'Failed to fetch' in the browser.",
 
   "upstreams": [
     {
@@ -28,7 +28,17 @@
       "name": "mustang-mock-prod",
       "desc": "Live traffic — real Mustang e-invoice service. gw_live_* keys only.",
       "upstream_id": "mustang-prod-upstream",
-      "extraPlugins": {}
+      "extraPlugins": {
+        "cors": {
+          "allow_origins": "https://smartlist.uz,https://www.smartlist.uz",
+          "allow_methods": "GET,POST",
+          "allow_headers": "Authorization,apikey,Content-Type,X-Request-Id",
+          "expose_headers": "Content-Disposition",
+          "allow_credential": false,
+          "max_age": 3600,
+          "_meta": { "priority": 10000 }
+        }
+      }
     },
     {
       "id": "mustang-mock-test",
@@ -37,7 +47,7 @@
       "upstream_id": "mustang-mock-upstream",
       "extraPlugins": {
         "cors": {
-          "allow_origins": "https://smartlist.uz",
+          "allow_origins": "https://smartlist.uz,https://www.smartlist.uz",
           "allow_methods": "GET,POST",
           "allow_headers": "Authorization,apikey,Content-Type,X-Request-Id",
           "expose_headers": "Content-Disposition",
